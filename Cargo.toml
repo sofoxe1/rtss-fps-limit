@@ -1,7 +1,7 @@
 [package]
 name = "rtss-rs"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 [dependencies]
 rtss-sys = { git = "https://github.com/ShayBox/RTSS-SYS", version = "0.1.2",rev="24567b7a7c2ccc76344be368eab6680c6d3b3c48" }
 rust-ini = "0.21.1"

@@ -34,10 +34,13 @@ pub fn get_write_permission() {
 pub fn has_write_permission() -> bool {
     let mut step = PathBuf::from_str(INSTALL_PATH.to_str().unwrap()).unwrap();
     step = step.join("Profiles").join(".permission_check");
-    if let Err(err) = fs::write(&step, "test")
-        && let io::ErrorKind::PermissionDenied = err.kind()
-    {
-        false
+    if let Err(err) = fs::write(&step, "test") {
+        if let io::ErrorKind::PermissionDenied = err.kind() {
+            false
+        } else {
+            fs::remove_file(step).unwrap();
+            true
+        }
     } else {
         fs::remove_file(step).unwrap();
         true

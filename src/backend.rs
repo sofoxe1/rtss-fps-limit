@@ -17,14 +17,14 @@ use rtss_sys::{
     RTSS_SHARED_MEMORY_LPRTSS_SHARED_MEMORY_APP_ENTRY,
 };
 use windows::{
+    core::PCSTR,
     Win32::{
         Foundation::{CloseHandle, HANDLE},
         System::Memory::{
-            FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, OpenFileMappingA,
-            UnmapViewOfFile,
+            MapViewOfFile, OpenFileMappingA, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
+            MEMORY_MAPPED_VIEW_ADDRESS,
         },
     },
-    core::PCSTR,
 };
 
 use crate::get_write_permission;
@@ -77,11 +77,10 @@ pub fn save_profile(name: &CString, profile: &Ini) -> Result<(), RtssError> {
     if step.exists().not() {
         return Err(RtssError::ProfileNotFound);
     }
-    if let Err(err) = profile.write_to_file(step).map_err(RtssError::IO)
-        && let RtssError::IO(err) = err
-        && let io::ErrorKind::PermissionDenied = err.kind()
-    {
-        get_write_permission();
+    if let Err(RtssError::IO(err)) = profile.write_to_file(step).map_err(RtssError::IO) {
+        if let io::ErrorKind::PermissionDenied = err.kind() {
+            get_write_permission();
+        }
     }
     Ok(())
 }
