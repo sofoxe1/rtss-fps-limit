@@ -265,7 +265,7 @@ dependencies = [
 [[package]]
 name = "rtss-sys"
 version = "0.1.2"
-source = "git+https://github.com/ShayBox/RTSS-SYS#24567b7a7c2ccc76344be368eab6680c6d3b3c48"
+source = "git+https://github.com/ShayBox/RTSS-SYS?rev=24567b7a7c2ccc76344be368eab6680c6d3b3c48#24567b7a7c2ccc76344be368eab6680c6d3b3c48"
 dependencies = [
  "bindgen",
 ]

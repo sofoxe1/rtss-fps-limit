@@ -3,6 +3,6 @@ name = "rtss-rs"
 version = "0.1.0"
 edition = "2024"
 [dependencies]
-rtss-sys = { git = "https://github.com/ShayBox/RTSS-SYS", version = "0.1.2" }
-rust-ini = "0.21.3"
+rtss-sys = { git = "https://github.com/ShayBox/RTSS-SYS", version = "0.1.2",rev="24567b7a7c2ccc76344be368eab6680c6d3b3c48" }
+rust-ini = "0.21.1"
 windows = { version = "0.61.3", features = ["Win32", "Win32_System","Win32_System_Memory"] }
