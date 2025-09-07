@@ -74,9 +74,6 @@ pub fn save_profile(name: &CString, profile: &Ini) -> Result<(), RtssError> {
         )));
     }
     step = step.join(format!("{}.cfg", name.to_str().unwrap()));
-    if step.exists().not() {
-        return Err(RtssError::ProfileNotFound);
-    }
     if let Err(RtssError::IO(err)) = profile.write_to_file(step).map_err(RtssError::IO) {
         if let io::ErrorKind::PermissionDenied = err.kind() {
             get_write_permission();
