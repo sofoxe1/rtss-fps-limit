@@ -84,6 +84,7 @@ pub fn save_profile(name: &CString, profile: &Ini) -> Result<(), RtssError> {
     }
     Ok(())
 }
+
 unsafe impl Send for RtssShem {}
 unsafe impl Sync for RtssShem {}
 pub struct RtssShem {

@@ -51,3 +51,15 @@ pub fn profile_exists(name: &str) -> bool {
         .join(format!("{}.cfg", name))
         .exists()
 }
+pub fn get_profile_list() -> Vec<String> {
+    PathBuf::from("C:\\Program Files (x86)\\RivaTuner Statistics Server\\Profiles\\")
+        .read_dir()
+        .unwrap()
+        .map(|x| x.unwrap().file_name().into_string().unwrap())
+        .filter(|x| x.ends_with(".cfg"))
+        .map(|mut x| {
+            x.truncate(x.len() - ".cfg".len());
+            x
+        })
+        .collect::<Vec<String>>()
+}
